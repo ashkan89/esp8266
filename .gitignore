@@ -1,0 +1,7 @@
+.pio/
+.vscode/
+include/secrets.h
+esp8266.yaml
+__pycache__/
+graphify-out/
+

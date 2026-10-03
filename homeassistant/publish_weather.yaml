@@ -1,0 +1,59 @@
+alias: Publish Weather to MQTT
+description: Send current HA weather and home location to the ESP8266.
+mode: restart
+triggers:
+  - trigger: time_pattern
+    minutes: "/15"
+  - trigger: homeassistant
+    event: start
+  - trigger: mqtt
+    topic: home/living_ctrl_8b3f40/availability
+    payload: online
+  - trigger: mqtt
+    topic: home/living_ctrl_8b3f40/weather/request
+    payload: PRESS
+variables:
+  base_topic: home/living_ctrl_8b3f40
+  weather_entity: weather.forecast_home
+  region: Iran
+actions:
+  - action: mqtt.publish
+    data:
+      topic: "{{ base_topic }}/location/set"
+      qos: 1
+      retain: false
+      payload: >-
+        {{ {'latitude':state_attr('zone.home', 'latitude'),
+            'longitude':state_attr('zone.home', 'longitude'),
+            'location':state_attr('zone.home', 'friendly_name') or 'Home',
+            'region':region,
+            'timezone':now().tzinfo | string,
+            'utc_offset_minutes':(now().utcoffset().total_seconds() / 60) | int} | tojson }}
+  - action: mqtt.publish
+    data:
+      topic: "{{ base_topic }}/weather/set"
+      qos: 1
+      retain: false
+      payload: >-
+        {% set condition = states(weather_entity) %}
+        {% set t = state_attr(weather_entity, 'temperature') %}
+        {% set h = state_attr(weather_entity, 'humidity') %}
+        {% set cloud = state_attr(weather_entity, 'cloud_coverage') %}
+        {% set codes = {'sunny':0, 'clear-night':0, 'partlycloudy':2,
+                        'cloudy':3, 'fog':45, 'rainy':61, 'pouring':65,
+                        'snowy':71, 'snowy-rainy':67, 'hail':77,
+                        'lightning':95, 'lightning-rainy':95,
+                        'windy':0, 'windy-variant':2, 'exceptional':3} %}
+        {% if condition in codes and is_number(t) and is_number(h) %}
+          {% set t = t | float %}
+          {% if state_attr(weather_entity, 'temperature_unit') == '°F' %}
+            {% set t = (t - 32) * 5 / 9 %}
+          {% endif %}
+          {{ {'source':'home-assistant', 'sample_time':as_timestamp(now()) | int,
+              'condition':condition, 'temperature':t, 'humidity':h | float,
+              'cloud_cover':cloud | float if is_number(cloud) else none,
+              'precipitation':none, 'code':codes[condition],
+              'is_day':0 if condition == 'clear-night' or is_state('sun.sun', 'below_horizon') else 1} | tojson }}
+        {% else %}
+          {{ {'available':false} | tojson }}
+        {% endif %}

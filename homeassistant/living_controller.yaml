@@ -1,0 +1,106 @@
+# Copy into HA's packages directory and enable packages in configuration.yaml.
+# Set the topic helper below to the ID shown by MQTT discovery/device dashboard.
+input_text:
+  living_controller_mqtt_base:
+    name: Living controller MQTT base
+    initial: home/living_ctrl_8b3f40
+    max: 100
+  living_controller_weather_entity:
+    name: Living controller weather entity
+    initial: weather.forecast_home
+    max: 100
+  living_controller_region:
+    name: Living controller region
+    initial: Iran
+    max: 60
+
+# Coordinates follow zone.home. Weather HTTP/TLS runs on HA rather than the ESP.
+rest:
+  - resource_template: >-
+      https://api.open-meteo.com/v1/forecast?latitude={{ state_attr('zone.home', 'latitude') }}&longitude={{ state_attr('zone.home', 'longitude') }}&current=temperature_2m,relative_humidity_2m,precipitation,weather_code,cloud_cover,is_day&timezone=UTC
+    scan_interval: 900
+    timeout: 10
+    sensor:
+      - name: Living controller Open Meteo
+        unique_id: living_controller_open_meteo
+        value_template: "{{ value_json.current.weather_code }}"
+        json_attributes_path: "$.current"
+        json_attributes:
+          - time
+          - temperature_2m
+          - relative_humidity_2m
+          - precipitation
+          - weather_code
+          - cloud_cover
+          - is_day
+
+automation:
+  - id: living_controller_weather_feed
+    alias: Living controller weather feed
+    mode: restart
+    triggers:
+      - trigger: time_pattern
+        minutes: "/15"
+      - trigger: homeassistant
+        event: start
+      - trigger: state
+        entity_id:
+          - weather.forecast_home
+          - sensor.living_controller_open_meteo
+      - trigger: mqtt
+        topic: home/+/availability
+        payload: online
+      - trigger: mqtt
+        topic: home/+/weather/request
+        payload: PRESS
+    conditions:
+      - condition: template
+        value_template: >-
+          {{ trigger.platform != 'mqtt' or trigger.topic in [states('input_text.living_controller_mqtt_base') ~ '/availability', states('input_text.living_controller_mqtt_base') ~ '/weather/request'] }}
+    actions:
+      # Sent before weather, even when both providers are unavailable.
+      - action: mqtt.publish
+        data:
+          topic: "{{ states('input_text.living_controller_mqtt_base') }}/location/set"
+          qos: 1
+          retain: false
+          payload: >-
+            {{ {'latitude':state_attr('zone.home', 'latitude'),
+                'longitude':state_attr('zone.home', 'longitude'),
+                'location':state_attr('zone.home', 'friendly_name') or 'Home',
+                'region':states('input_text.living_controller_region'),
+                'timezone':now().tzinfo | string,
+                'utc_offset_minutes':(now().utcoffset().total_seconds() / 60) | int} | tojson }}
+      - action: mqtt.publish
+        data:
+          topic: "{{ states('input_text.living_controller_mqtt_base') }}/weather/set"
+          qos: 1
+          retain: false
+          payload: >-
+            {% set w = states('input_text.living_controller_weather_entity') %}
+            {% set r = 'sensor.living_controller_open_meteo' %}
+            {% set condition = states(w) %}
+            {% set ha_ok = condition not in ['unknown', 'unavailable', ''] and is_number(state_attr(w, 'temperature')) and is_number(state_attr(w, 'humidity')) %}
+            {% set source_time = state_attr(r, 'time') %}
+            {% set age = as_timestamp(now()) - as_timestamp((source_time ~ '+00:00') if source_time else '', 0) %}
+            {% set rest_ok = is_number(states(r)) and age >= -300 and age < 1800 %}
+            {% set code_map = {'sunny':0, 'clear-night':0, 'partlycloudy':2, 'cloudy':3, 'fog':45, 'rainy':61, 'pouring':65, 'snowy':71, 'snowy-rainy':67, 'hail':77, 'lightning':95, 'lightning-rainy':95, 'windy':0, 'windy-variant':2, 'exceptional':3} %}
+            {% if ha_ok %}
+              {% set t = state_attr(w, 'temperature') | float %}
+              {% if state_attr(w, 'temperature_unit') == '°F' %}{% set t = (t - 32) * 5 / 9 %}{% endif %}
+              {% set cloud = state_attr(w, 'cloud_coverage') %}
+              {{ {'source':'home-assistant', 'sample_time':as_timestamp(now()) | int,
+                  'condition':condition, 'temperature':t, 'humidity':state_attr(w, 'humidity') | float,
+                  'cloud_cover':cloud | float if is_number(cloud) else (state_attr(r, 'cloud_cover') if rest_ok else none),
+                  'precipitation':state_attr(r, 'precipitation') if rest_ok else none,
+                  'code':code_map.get(condition, 3), 'is_day':0 if condition == 'clear-night' or is_state('sun.sun', 'below_horizon') else 1} | tojson }}
+            {% elif rest_ok %}
+              {% set code = states(r) | int %}
+              {% set condition = 'sunny' if code == 0 else 'cloudy' if code <= 3 else 'fog' if code in [45,48] else 'rainy' if 51 <= code <= 67 or 80 <= code <= 82 else 'snowy' if 71 <= code <= 77 or 85 <= code <= 86 else 'lightning-rainy' if code >= 95 else 'exceptional' %}
+              {{ {'source':'open-meteo', 'sample_time':as_timestamp(source_time ~ '+00:00') | int,
+                  'condition':condition, 'temperature':state_attr(r, 'temperature_2m'),
+                  'humidity':state_attr(r, 'relative_humidity_2m'), 'cloud_cover':state_attr(r, 'cloud_cover'),
+                  'precipitation':state_attr(r, 'precipitation'), 'code':code, 'is_day':state_attr(r, 'is_day')} | tojson }}
+            {% else %}
+              {{ {'available':false} | tojson }}
+            {% endif %}

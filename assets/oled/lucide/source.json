@@ -1,0 +1,19 @@
+{
+  "repository": "https://github.com/lucide-icons/lucide",
+  "commit": "500620a2e8123f8d1db191538886dc0c223f69a9",
+  "icons": [
+    "sun",
+    "moon",
+    "sunrise",
+    "sunset",
+    "cloud",
+    "cloud-sun",
+    "cloud-moon",
+    "cloud-rain",
+    "cloud-snow",
+    "cloud-fog",
+    "cloud-lightning",
+    "wind",
+    "circle-question-mark"
+  ]
+}

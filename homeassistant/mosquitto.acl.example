@@ -1,0 +1,17 @@
+# Replace DEVICEID with the chip ID suffix and configure users in Mosquitto.
+user relay_controller
+topic read home/living_ctrl_DEVICEID/+/set
+topic read home/living_ctrl_DEVICEID/relay/+/set
+topic read home/living_ctrl_DEVICEID/pwm/+/set
+topic read homeassistant/status
+topic write home/living_ctrl_DEVICEID/#
+topic write homeassistant/+/living_ctrl_DEVICEID/+/config
+
+user homeassistant
+topic read home/#
+topic read homeassistant/#
+topic write homeassistant/status
+topic write home/+/+/set
+topic write home/+/relay/+/set
+topic write home/+/pwm/+/set
+
